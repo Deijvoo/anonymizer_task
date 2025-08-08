@@ -1,0 +1,15 @@
+/build*/
+/cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+*.o
+*.a
+*.so*
+anonymizer
+src/*.capnp.c++
+src/*.capnp.h
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
