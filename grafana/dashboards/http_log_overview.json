@@ -1,0 +1,173 @@
+{
+  "__inputs": [],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "8.4.5"
+    },
+    {
+      "type": "datasource",
+      "id": "vertamedia-clickhouse-datasource",
+      "name": "ClickHouse",
+      "version": "2.3.1"
+    }
+  ],
+  "title": "HTTP Log Overview",
+  "timezone": "",
+  "templating": {
+    "list": [
+      {
+        "name": "resource_id",
+        "label": "Resource ID",
+        "type": "query",
+        "datasource": "ClickHouse",
+        "query": "SELECT DISTINCT resource_id FROM logs.http_log ORDER BY resource_id LIMIT 1000",
+        "refresh": 2
+      },
+      {
+        "name": "status",
+        "label": "HTTP Status",
+        "type": "query",
+        "datasource": "ClickHouse",
+        "query": "SELECT DISTINCT response_status FROM logs.http_log ORDER BY response_status",
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Requests (last 1h)",
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "query": "SELECT count() FROM logs.http_log WHERE timestamp >= now() - INTERVAL 1 HOUR"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "graphMode": "none",
+        "colorMode": "value"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Traffic bytes (last 1h)",
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "query": "SELECT sum(bytes_sent) FROM logs.http_log WHERE timestamp >= now() - INTERVAL 1 HOUR"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "graphMode": "none",
+        "colorMode": "value"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests by status",
+      "datasource": "ClickHouse",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT toStartOfMinute(timestamp) AS t, response_status, count() AS c FROM logs.http_log WHERE timestamp >= now() - INTERVAL 6 HOUR GROUP BY t, response_status ORDER BY t"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Traffic bytes by resource_id",
+      "datasource": "ClickHouse",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      },
+      "targets": [
+        {
+          "query": "SELECT toStartOfMinute(timestamp) AS t, resource_id, sum(bytes_sent) AS b FROM logs.http_log WHERE timestamp >= now() - INTERVAL 6 HOUR GROUP BY t, resource_id ORDER BY t"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Cache status share (last 1h)",
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "query": "SELECT cache_status, count() FROM logs.http_log WHERE timestamp >= now() - INTERVAL 1 HOUR GROUP BY cache_status ORDER BY count() DESC LIMIT 10"
+        }
+      ],
+      "gridPos": {
+        "h": 6,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      }
+    },
+    {
+      "type": "table",
+      "title": "Top URLs (last 1h)",
+      "datasource": "ClickHouse",
+      "targets": [
+        {
+          "query": "SELECT url, count() AS cnt, sum(bytes_sent) AS bytes FROM logs.http_log WHERE timestamp >= now() - INTERVAL 1 HOUR GROUP BY url ORDER BY cnt DESC LIMIT 50"
+        }
+      ],
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      }
+    }
+  ],
+  "schemaVersion": 30,
+  "version": 1
+}

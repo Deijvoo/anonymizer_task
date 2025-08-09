@@ -1,0 +1,55 @@
+version: '3'
+services:
+  zookeeper:
+    container_name: ${COMPOSE_PROJECT_NAME}_zookeeper
+    ports:
+      - "${ZOOKEEPER_PORT:-22181}:2181"
+
+  broker:
+    container_name: ${COMPOSE_PROJECT_NAME}_broker
+    ports:
+      - "${KAFKA_PORT:-19092}:9092"
+      - "${KAFKA_JMX_PORT:-19101}:9101"
+    environment:
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:${KAFKA_PORT:-19092}
+
+  grafana:
+    container_name: ${COMPOSE_PROJECT_NAME}_grafana
+    ports:
+      - "${GRAFANA_PORT:-33000}:3000"
+
+  prometheus:
+    container_name: ${COMPOSE_PROJECT_NAME}_prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-39090}:9090"
+
+  jmx-kafka:
+    container_name: ${COMPOSE_PROJECT_NAME}_jmx_kafka
+    ports:
+      - "${JMX_EXPORTER_PORT:-35556}:5556"
+
+  kafka-ui:
+    container_name: ${COMPOSE_PROJECT_NAME}_kafka_ui
+    ports:
+      - "${KAFKA_UI_PORT:-34000}:8080"
+
+  clickhouse-server:
+    container_name: ${COMPOSE_PROJECT_NAME}_clickhouse
+    ports:
+      - "${CH_HTTP_PORT:-18123}:8123"
+      - "${CH_NATIVE_PORT:-19000}:9000"
+      - "${CH_INTERSERVER_PORT:-19009}:9009"
+
+  ch-proxy:
+    container_name: ${COMPOSE_PROJECT_NAME}_ch_proxy
+    ports:
+      - "${CH_PROXY_PORT:-18124}:8124"
+
+  http-log-kafka-producer:
+    container_name: ${COMPOSE_PROJECT_NAME}_log_producer
+
+  anonymizer:
+    container_name: ${COMPOSE_PROJECT_NAME}_anonymizer
+    environment:
+      - BATCH_MAX=${BATCH_MAX:-10000}
+      - FLUSH_SECONDS=${FLUSH_SECONDS:-60}

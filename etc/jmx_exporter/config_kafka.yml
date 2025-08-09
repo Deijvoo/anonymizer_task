@@ -284,6 +284,17 @@ rules:
       aggregate: $3
       service: kafka-broker
       env: cluster-demo
+
+  # ------------------------------------------------------------------------------------------------------
+  # Compatibility aliases for dashboards expecting *borkertopicmetrics_*_total counters
+  # Map the JMX Count of MessagesInPerSec to *_total so Grafana queries like
+  # kafka_server_brokertopicmetrics_messagesin_total start working out of the box.
+  # ------------------------------------------------------------------------------------------------------
+  - pattern: kafka.server<type=BrokerTopicMetrics, name=MessagesInPerSec><>Count
+    name: kafka_server_brokertopicmetrics_messagesin_total
+    labels:
+      service: kafka-broker
+      env: cluster-demo
   #-------------------------------------------------------------------------------------------------------
   # KafkaServer / DelayedFetchMetrics :
   #-------------------------------------------------------------------------------------------------------
