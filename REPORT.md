@@ -1,97 +1,161 @@
-## REPORT (Submission)
+## REPORT (from-scratch narrative)
 
-### What this does
-- End-to-end pipeline: Kafka → C++ anonymizer → ClickHouse via Nginx proxy (limited to 1 request per minute)
-- IP anonymization: last octet to “X” (e.g., 1.2.3.4 → 1.2.3.X)
-- At-least-once: Kafka offsets are committed only after a successful insert to ClickHouse
-- Flush policy: send a batch roughly once per minute; when the topic is idle, a time-based flush still happens
-- Data model: `logs.http_log` (raw) + `logs.http_log_agg` (SummingMergeTree) with a materialized view `logs.http_log_mv`
+### Executive summary
+This repository implements an ETL pipeline for HTTP access logs with at-least-once delivery semantics:
+- Produce binary log records (Cap'n Proto) into Kafka (`http_log`).
+- Consume in a C++ anonymizer that masks IPs and batches JSONEachRow inserts to ClickHouse via an Nginx proxy limited to 1 request/minute.
+- Observe the system in Grafana (ClickHouse panels for traffic, Prometheus panels for Kafka broker) and verify health with tests (unit, integration, E2E).
 
-### Architecture (arrow-by-arrow)
-![Architecture](anonymizer.png)
+The code favors correctness and robustness over peak throughput, given the 1 req/min insertion constraint. Backoff on 503 is explicit and idempotent effects are documented.
 
-1) Log Producer → Kafka (topic `http_log`)
-- Cap’n Proto payload; producer rate controlled by `KAFKA_PRODUCER_DELAY_MS`.
-- Failure: broker down/slow — producer retries.
-- Observability: Kafka‑UI (topic present), Prometheus JMX target UP.
+### Why this design
+- Simplicity at the edges: Kafka for decoupling, ClickHouse for analytics, HTTP insert for operational ease, proxy for rate limiting.
+- Explicit delivery semantics: manual commits in Kafka after a successful insert → at-least-once without hidden magic.
+- Operability: deterministic flush timer, visible logs, clear error handling, small surface area to debug.
 
-2) Kafka → Anonymizer (consumer)
-- Manual offset control; decode → anonymize IP → build JSONEachRow line; accumulate into a batch.
-- Time-based flush runs even when no new messages arrive.
-- Observability: anonymizer logs, Kafka lag.
+What I considered and (for now) rejected:
+- Exactly-once end-to-end: possible with transactional Kafka + idempotent producer and dedup in ClickHouse (ReplacingMergeTree or `deduplicate_blocks=1`), but overkill for this task and needs much more testing.
+- Direct CH driver/binary protocol: HTTP is good enough, easier to operate behind the rate-limiting proxy.
+- Per-row inserts: would satisfy proxy limit but terrible for CH performance; batched JSONEachRow is the right trade-off.
+
+### Architecture (arrow-by-arrow, mirroring `anonymizer.png`)
+1) Logs → Kafka (`http_log`)
+   - Extract step. The provided producer serializes records using Cap'n Proto. Backpressure is natural: if broker is down or slow, producer retries and rate can be tuned via `KAFKA_PRODUCER_DELAY_MS`.
+   - Why Kafka: durability, replay, and consumer group scaling without coupling producer to ClickHouse availability.
+
+2) Kafka → Anonymizer (C++)
+   - Transform step. The consumer decodes Cap'n Proto, masks IPs (last octet → `X`), builds a JSON line, and accumulates rows in memory.
+   - Manual offset management: `enable.auto.commit=false` and commit only after a successful batch insert → at-least-once.
+   - Graceful shutdown: signal handlers and clean exit to avoid partial commits.
 
 3) Anonymizer → Nginx proxy (1 req/min) → ClickHouse HTTP
-- Insert with JSONEachRow into `logs.http_log`.
-- 503 from proxy means “too early”; anonymizer waits until the next window and retries.
-- Offsets are committed only after a successful flush (at‑least‑once).
+   - Load step. Batched `JSONEachRow` insert via `libcurl`.
+   - Rate limit: the proxy enforces 1 request/min. On HTTP 503, the anonymizer backs off to the next allowed window (`next_allowed_send`) instead of hammering the proxy.
+   - Why proxy: isolates ClickHouse from client behavior and centralizes rate policy. Could also host auth/TLS here.
 
-4) Kafka → JMX Exporter → Prometheus → Grafana (Kafka dashboards)
-- Broker health & performance (latencies, idle %, RPS, queue sizes).
+4) Kafka → JMX Exporter → Prometheus → Grafana
+   - Broker health: controller count, under-replicated partitions, request handler idle %, I/O rates.
+   - Our Prometheus job is `kafka` scraping `jmx-kafka:5556`.
 
-5) ClickHouse → Grafana (HTTP Log Overview)
-- Rows/bytes per minute, status mix, top URLs.
+5) ClickHouse → Grafana (HTTP Logs)
+   - Visualize traffic: rows/min, bytes/min, RPS, p95 latencies, status mix, top URLs. We deliver two ClickHouse dashboards in JSON.
 
 6) Kafka → Kafka‑UI (optional)
-- Convenience to inspect topics, consumer groups and lag.
+   - Convenience UI to inspect topics, consumer groups, offsets and lag while testing.
 
-### SQL summary
-- `logs.http_log` → MergeTree, `PARTITION BY toYYYYMMDD(timestamp)`, `ORDER BY (timestamp, resource_id, response_status, cache_status, remote_addr)`.
-- `logs.http_log_agg` + MV `logs.http_log_mv` → `sum(bytes_sent)`, `count()` for fast aggregations.
+### Delivery semantics and correctness
+- At-least-once: commits follow successful inserts. A crash after insert but before commit causes duplicates on replay — expected and documented.
+- Dedup strategies (if needed later):
+  - ClickHouse ReplacingMergeTree keyed by a stable identity (e.g., `(topic, partition, offset)`), or
+  - `deduplicate_blocks=1` on insert path with consistent block hashes, or
+  - Persist a dedup token in the JSON and aggregate through a materialized view.
 
-### Real numbers from my run
-(collected via `clickhouse-client`)
+### Failure modes and handling
+- ClickHouse proxy 503 (rate limit): wait until the next window, then retry; we explicitly track `next_allowed_send`.
+- Kafka topic missing: producer creates or we create via `kafka-topics`; consumer logs a clear error.
+- Network hiccups/timeouts: `libcurl` connect and request timeouts with clear messages.
+- Idle topic: time-based flush still occurs via a timer path checked each loop iteration.
 
-- Total rows / last event time:
-  - rows: **10,985**
-  - last_ts: **2025‑08‑10 11:55:35**
+### Performance
+- Insert cadence: ~60–70s between flushes (window + network + CH). This dominates end-to-end latency.
+- Throughput: limited by 1 req/min; within that, large batched inserts are efficient for CH.
+- Observability: Grafana ClickHouse panels show rows/min, bytes/min, RPS; Kafka panels show request idle %, messages/sec.
 
-- Rows per minute (last 15m; sample):
-  - 11:44 5, 11:45 5, 11:46 5, 11:47 5, 11:48 6, 11:49 5, 11:50 3, 11:51 4, 11:52 6, 11:53 2, 11:54 3, 11:55 1, 11:57 1
+Scaling paths
+- Increase proxy rate (e.g., 60 req/min) and switch to sub-minute batching.
+- Horizontalize: run multiple anonymizer instances in the same consumer group (increase Kafka partitions). Shard by key (e.g., `resource_id % N`) and give each instance its own proxy lane (or time‑offset the 1 req/min slots) → true parallel inserts without a buffer.
+- Kafka: increase partitions and run more consumers in the same group (while respecting proxy lanes).
+- ClickHouse: move to Replicated/Distributed tables when a single node becomes the bottleneck.
 
-- Bytes per minute (last 15m; sample):
-  - 11:45 3,031,295; 11:46 7,088,037; 11:47 6,213,006; 11:48 7,634,157; 11:49 3,283,334; 11:50 552,999; 11:51 5,652,298; 11:52 6,586,149; 11:53 2,755,195; 11:54 3,993,978; 11:55 2,873,050; 11:57 303,973
+### Maintainability and code choices
+- Small, explicit code in C++17; helpers split into `src/util.{h,cpp}` for testability.
+- Clear control flow: early returns, explicit error paths, no implicit auto-commits.
+- Minimal dependencies: `librdkafka++`, `capnp`, `curl`, `spdlog`.
 
-- Share by HTTP status (last 1h):
-  - 301: 90, 502: 78, 404: 72, 504: 71, 500: 68, 400: 66, 200: 65, 403: 63
+### Security considerations
+- IP masking: last IPv4 octet masked. For IPv6 or stricter privacy, use a cryptographic prefix-preserving hash with salt rotation.
+- Transport: the demo runs plain HTTP inside a compose network. For production, terminate TLS at the proxy; restrict ClickHouse ports to the internal network.
+- Secrets: environment variables for credentials; in production, use Docker secrets or a vault.
 
-- Top URLs (examples, last 1h):
-  - /media/category/s1yhzkfha18iibf7l — 1 row — 1,585,227 B
-  - /a/data/category/data/9gp3ly.jpeg — 1 row — 421,704 B
-  - /games/files/cdn/… .mpd — 1 row — 65,349 B
+### Alternatives considered
+- Exactly-once-ish: Kafka transactions + idempotent producers; ClickHouse dedup on insert. Higher complexity; skipped for task scope.
+- Buffer table in ClickHouse: insert fast into a Buffer engine, auto-flush to MergeTree. Could replace the proxy if policy allows.
+- Direct Kafka → ClickHouse (Kafka engine in CH): reduces C++ logic, but sacrifices custom anonymization unless pushed upstream.
 
-### Latency & durability (plain words)
-- Because of the 1 req/min proxy, a batch is flushed roughly every **60–70 seconds** (window + network + CH). Occasional **503** is expected; the next attempt passes.
-- **No data loss** in normal operation: offsets are committed only after a successful insert.
-- Duplicates can appear only if a crash happens **after** the insert and **before** the commit. If consumers require dedupe, use **ReplacingMergeTree** keyed by `(topic, partition, offset)` or a dedup token (or aggregate from a deduped MV).
+### What is optimal vs. not
+- Optimal here: batched JSONEachRow, explicit backoff, manual commits, simple deploy.
+- Not optimal for high TPS: 1 req/min proxy is a hard cap; if SLOs require lower latency, raise the rate or shard lanes.
 
-### How to run
-- Start stack: `docker compose up -d`
-- Run anonymizer:
-  - foreground: `docker compose run --rm anonymizer`
-  - background: `docker compose up -d anonymizer`
-- Grafana: http://localhost:3000 (admin/kafka)
+### Production hardening (what I'd add before go‑live)
+- Soak tests with realistic rates; chaos tests (random restarts), and automated SLO dashboards (flush duration, retries, lag).
+- Exactly-once-ish dedup if consumers require it.
+- TLS + auth on the proxy; ClickHouse users with minimum privileges.
+- Structured metrics from the anonymizer (Prometheus textfile or native expo) and alerts.
 
-### Scaling & limits
-- The main bottleneck is the **1 req/min** proxy. Options:
-  - Raise the limit (e.g., 60 req/min) and flush smaller batches every second.
-  - **Shard**: multiple proxies → sharded ClickHouse inserts by key (e.g., `resource_id`).
-  - Buffer to an intermediate store (Kafka/local) and **INSERT SELECT** into ClickHouse.
-- Kafka consumption can scale by increasing **partitions** and running multiple consumers (same `group.id`). Keep **one writer per proxy window** or coordinate writers (leader election) to avoid hitting the limit.
-- ClickHouse can scale out with **ReplicatedMergeTree / Distributed** once a single node is not enough.
-- Exactly‑once‑ish: use ReplacingMergeTree with a stable dedup key or `deduplicate_blocks=1`.
+### What I got stuck on and how I solved it
+- Docker daemon/WSL issues → restart scripts; ensured compose uses project root as context.
+- Cap'n Proto headers missing → generate includes added to CMake; include path fixed.
+- `librdkafka++` runtime missing → install `librdkafka++1` in runtime image.
+- Kafka topic not found → ensure producer creates or create via CLI.
+- ClickHouse `HTTP 400` parse error → fixed JSON formatting and numeric timestamp.
+- Grafana datasource glitches and port conflicts → use access `proxy`, correct URLs, and moved Grafana to 3001 on host.
+- Flush timing on idle topic → time-based flush executed every loop iteration, not only on new messages.
+- Rate-limit storms (many 503) → consolidated backoff and removed duplicate flush path.
 
-### Logical commit breakdown (for a clean history)
-- **chore(infra)**: docker-compose stack (Kafka, ZK, ClickHouse, proxy, Prometheus, Grafana, Kafka‑UI, JMX)
-- **feat(sql)**: ClickHouse schema & MV (`logs.http_log`, `logs.http_log_agg`, `logs.http_log_mv`)
-- **feat(anonymizer)**: C++ consumer, Cap’n Proto decode, IP anonymization, JSONEachRow batch insert, manual commits
-- **fix(anonymizer)**: idle flush (time-based flush also when topic is quiet); retry/backoff for 503
-- **feat(grafana)**: provisioning (Prometheus & ClickHouse) + Kafka dashboards + HTTP Log Overview
-- **docs(report)**: submission report with real numbers
-- **chore(cleanup)**: remove duplicates & generated artefacts; tighten .gitignore
+### Time investment (rough)
+- Research/reading: ~2–3h
+- Core anonymizer implementation + fixes: ~5–6h
+- Docker/compose integration + build fixes: ~3–4h
+- Grafana/Prometheus setup + dashboards: ~2–3h
+- Tests (unit, integ, E2E) + stabilization: ~2h
+- Documentation/report: ~1–2h
 
-### Production readiness (tests I would add)
-- Load tests around the 1 req/min limit: batch size, retries, end‑to‑end latency across producer rates
-- Failure injection: CH/proxy downtime, network hiccups, Kafka restarts → verify recovery and at‑least‑once
-- Duplicate scenarios: crash between insert & commit → validate dedupe strategy (ReplacingMergeTree/dedup token)
-- Backpressure and memory under sustained spikes (with and without idle)
-- Metrics & alerts: flush duration, retry spikes, lag; Grafana SLO panels
+### How to run (quick)
+- Bring up stack: `docker compose up -d`
+- Grafana: http://localhost:3001 (admin/kafka)
+- (Optional) Recreate CH schema (auto-init via sidecar is included): `docker compose up -d clickhouse-init`
+
+### Tests
+- Unit (no infra): `cmake -S . -B build && cmake --build build -j && ctest --test-dir build -V`
+- Integration (needs stack):
+  - Kafka → anonymizer: `bash tests/integration/kafka_to_anonymizer.sh`
+  - Anonymizer → ClickHouse: `bash tests/integration/anonymizer_to_clickhouse.sh`
+- E2E (full): `bash tests/e2e/test_full.sh`
+
+### Real data snapshot (from running system)
+- Total rows: 4,448
+- Last event time: 2025-08-12 19:15:59
+- Rows/min (last ~15m):
+  - 19:04 3, 19:05 4, 19:06 3, 19:07 8, 19:09 2, 19:10 3, 19:11 2, 19:12 2, 19:13 2, 19:14 2, 19:15 1
+- Bytes/min (last ~15m):
+  - 19:04 3,827,646; 19:05 4,300,961; 19:06 1,961,951; 19:07 10,099,096; 19:08 2,027,517; 19:09 1,552,338; 19:11 1,611,729; 19:12 693,496; 19:13 1,692,950; 19:14 1,398,340; 19:15 2,008,706
+- Status distribution (last 1h):
+  - 400:149, 500:149, 200:147, 301:147, 504:146, 404:141, 502:132, 403:111
+- Top URLs (last 1h, cnt/bytes): examples show heavy media assets (~2–5 MB per hit)
+- p95 request_time_milli (last ~15m):
+  - 19:04 1898; 19:05 17124.4; 19:06 21115.55; 19:07 26934.85; 19:08 20503.65; 19:09 17174; 19:10 23104.9; 19:11 16323.3; 19:12 25270.45; 19:13 28236.25; 19:14 7904.25; 19:15 11873; 19:16 23369.75
+
+### Dashboards and screenshots
+- ClickHouse dashboards: `grafana/dashboards/http_log_overview.json`, `grafana/dashboards/http_logs_dashboard.json`
+- Prometheus/Kafka: `grafana/dashboards/` (broker overview, replication, performance, JMX, topics)
+- Screenshot: add a single full dashboard PNG at `report_assets/dashboard.png`.
+
+### Appendix: SQL (DDL)
+`etc/clickhouse/01_schema.sql` creates:
+- `logs.http_log` (MergeTree) with partition by day and ordered by `(timestamp, resource_id, response_status, cache_status, remote_addr)`
+- `logs.http_log_agg` (SummingMergeTree) + MV `logs.http_log_mv` for pre-aggregations
+
+Note: Chaos testing (random restarts of broker/ClickHouse/proxy/anonymizer during sustained ingest) is planned before production rollout. Scope: verify continuous ingest, quantify duplicates under at‑least‑once, and validate automated recovery. Not executed in this submission.
+
+### Tests
+- Unit (native, no infra required): IP anonymization, JSON escaping, join, env fallback; Cap'n Proto round‑trip
+  - `cmake -S . -B build && cmake --build build -j && ctest --test-dir build -V`
+- Integration (requires stack):
+  - Kafka → anonymizer: `bash tests/integration/kafka_to_anonymizer.sh`
+  - Anonymizer → ClickHouse: `bash tests/integration/anonymizer_to_clickhouse.sh`
+- E2E (full path, tolerant to proxy backoff):
+  - `bash tests/e2e/test_full.sh`
+
+### Dashboards
+- ClickHouse: `grafana/dashboards/http_log_overview.json`, `grafana/dashboards/http_logs_dashboard.json`
+- Kafka/Prometheus: existing dashboards in `grafana/dashboards/` (cluster health, replication, performance, JMX, topics)

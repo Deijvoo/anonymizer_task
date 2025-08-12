@@ -50,7 +50,7 @@ services:
   grafana:
     image: "grafana/grafana:8.4.5"
     ports:
-     - "3000:3000"
+     - "3001:3000"
     environment:
       GF_PATHS_DATA : /var/lib/grafana
       GF_SECURITY_ADMIN_PASSWORD : kafka
@@ -109,6 +109,16 @@ services:
         soft: 262144
         hard: 262144
     container_name: clickhouse
+
+  clickhouse-init:
+    image: yandex/clickhouse-server
+    depends_on:
+      - clickhouse-server
+    volumes:
+      - ./etc/clickhouse/01_schema.sql:/init/01_schema.sql:ro
+    entrypoint: ["/bin/sh","-lc","for i in $(seq 1 60); do clickhouse-client --host clickhouse-server -q 'SELECT 1' && break || sleep 2; done; clickhouse-client --host clickhouse-server -n < /init/01_schema.sql"]
+    container_name: clickhouse-init
+
 
   ch-proxy:
     build: docker/ch-proxy

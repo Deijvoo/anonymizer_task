@@ -17,54 +17,8 @@ static void handle_signal(int) {
     g_running.store(false);
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
 
-std::string anonymize_ip(std::string_view ip) {
-    auto dot = ip.rfind('.');
-    return (dot == std::string_view::npos) ? std::string(ip)
-                                           : std::string(ip.substr(0, dot)) + ".X";
-}
-
-std::string join_rows(const std::vector<std::string> &rows) {
-    std::string out;
-    out.reserve(rows.size() * 128);
-    for (auto &r : rows) {
-        out += r;
-        out += '\n';
-    }
-    return out;
-}
-
-std::string getEnvOrDefault(const char* name, const char* fallback) {
-    if (const char* v = std::getenv(name); v && *v) return std::string(v);
-    return std::string(fallback);
-}
-
-std::string escape_json(std::string_view s) {
-    std::string out;
-    out.reserve(s.size() + 8);
-    for (char c : s) {
-        switch (c) {
-            case '"': out += "\\\""; break;
-            case '\\': out += "\\\\"; break;
-            case '\b': out += "\\b"; break;
-            case '\f': out += "\\f"; break;
-            case '\n': out += "\\n"; break;
-            case '\r': out += "\\r"; break;
-            case '\t': out += "\\t"; break;
-            default:
-                if (static_cast<unsigned char>(c) < 0x20) {
-                    char buf[7];
-                    std::snprintf(buf, sizeof(buf), "\\u%04x", c);
-                    out += buf;
-                } else {
-                    out += c;
-                }
-        }
-    }
-    return out;
-}
+// Helpers moved to src/util.cpp
 
 // ---------------------------------------------------------------------------
 // KafkaConsumer
@@ -201,6 +155,8 @@ int run_anonymizer(int /*argc*/, char* /*argv*/[]) {
             return static_cast<unsigned long long>(std::stoull(v));
         }());
         auto last_flush = std::chrono::steady_clock::now();
+        // Avoid hammering proxy after 503. When rate-limited, we wait until next_allowed_send.
+        auto next_allowed_send = std::chrono::steady_clock::time_point::min();
 
         // Graceful shutdown na SIGINT/SIGTERM
         std::signal(SIGINT, handle_signal);
@@ -208,7 +164,9 @@ int run_anonymizer(int /*argc*/, char* /*argv*/[]) {
 
         // helper to perform time-based flush even when idle
         auto try_flush = [&](std::chrono::steady_clock::time_point now) {
-            if (batch.empty() || now - last_flush < FLUSH_EVERY) return;
+            if (batch.empty()) return;
+            if (now < next_allowed_send) return; // still cooling down after 503
+            if (now - last_flush < FLUSH_EVERY) return;
             try {
                 sink.send(batch);
                 spdlog::info("Flushed {} rows to ClickHouse", batch.size());
@@ -221,7 +179,12 @@ int run_anonymizer(int /*argc*/, char* /*argv*/[]) {
                 const std::string msg = e.what();
                 const auto now_err = std::chrono::steady_clock::now();
                 if (msg.find("HTTP 503") != std::string::npos) {
-                    const auto wait = (last_flush + FLUSH_EVERY) - now_err;
+                    // Respect 1 req/min: schedule next attempt at the next window edge
+                    auto next_slot = last_flush + FLUSH_EVERY;
+                    if (next_slot <= now_err) next_slot = now_err + FLUSH_EVERY;
+                    next_allowed_send = next_slot;
+                    auto wait = std::chrono::duration_cast<std::chrono::milliseconds>(next_slot - now_err);
+                    spdlog::info("proxy 503 → backing off for {} ms until next slot", wait.count());
                     if (wait > std::chrono::milliseconds(0)) std::this_thread::sleep_for(wait);
                 } else {
                     std::this_thread::sleep_for(std::chrono::seconds(5));
@@ -277,38 +240,7 @@ int run_anonymizer(int /*argc*/, char* /*argv*/[]) {
                 }
             }
 
-            // flush based on time (1 req/min)
-            auto now = std::chrono::steady_clock::now();
-            if (now - last_flush >= FLUSH_EVERY && !batch.empty()) {
-                try {
-                    sink.send(batch);
-                    spdlog::info("Flushed {} rows to ClickHouse", batch.size());
-                    batch.clear();
-                    last_flush = now;
-                    // commit current offsets after successful write
-                    try {
-                        consumer.commitCurrent();
-                    } catch (const std::exception& e) {
-                        spdlog::error("commit failed: {}", e.what());
-                    }
-                } catch (const std::exception &e) {
-                    spdlog::error("{}", e.what());
-                    // If proxy returns 503, wait for next flush window (respect 1 req/min)
-                    std::string msg = e.what();
-                    auto now_err = std::chrono::steady_clock::now();
-                    if (msg.find("HTTP 503") != std::string::npos) {
-                        auto wait = (last_flush + FLUSH_EVERY) - now_err;
-                        if (wait > std::chrono::seconds(0)) {
-                            spdlog::info("proxy 503 → waiting {} ms until next slot", std::chrono::duration_cast<std::chrono::milliseconds>(wait).count());
-                            std::this_thread::sleep_for(wait);
-                        } else {
-                            std::this_thread::sleep_for(std::chrono::seconds(5));
-                        }
-                    } else {
-                        std::this_thread::sleep_for(std::chrono::seconds(5));
-                    }
-                }
-            }
+            // main flush is handled by try_flush(now) at the start of the loop
         }
 
     } catch (const std::exception &e) {

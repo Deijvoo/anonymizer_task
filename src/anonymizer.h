@@ -7,6 +7,7 @@
 #include <vector>
 #include <librdkafka/rdkafkacpp.h>
 #include <spdlog/spdlog.h>
+#include "util.h"
 
 // ---------------------------------------------------------------------------
 // Constants – for production, prefer loading from argv/env
@@ -16,12 +17,7 @@ inline constexpr const char* KAFKA_GROUP_ID_DEFAULT = "anonymizer";
 inline constexpr const char* CLICKHOUSE_URL =
     "http://localhost:8124/?query=INSERT%20INTO%20logs.http_log%20FORMAT%20JSONEachRow";
 
-// ---------------------------------------------------------------------------
-// Helpers
-std::string anonymize_ip(std::string_view ip);
-std::string join_rows(const std::vector<std::string>& rows);
-std::string getEnvOrDefault(const char* name, const char* fallback);
-std::string escape_json(std::string_view s);
+// Helpers are declared in `util.h`
 
 // ---------------------------------------------------------------------------
 // Kafka consumer (RAII wrapper)

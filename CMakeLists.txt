@@ -17,10 +17,11 @@ include_directories(
   ${CURL_INCLUDE_DIRS}
 )
 
-capnp_generate_cpp(CAPNP_SRCS CAPNP_HDRS src/http_log.capnp)
+capnp_generate_cpp(CAPNP_SRCS CAPNP_HDRS http_log.capnp)
 
 add_executable(anonymizer
   src/anonymizer.cpp
+  src/util.cpp
   ${CAPNP_SRCS}
   ${CAPNP_HDRS}
 )
@@ -42,5 +43,24 @@ target_include_directories(anonymizer
 
 if (MSVC)
   target_compile_definitions(anonymizer PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+include(CTest)
+if (BUILD_TESTING)
+  add_executable(test_util
+    tests/test_util.cpp
+    src/util.cpp
+  )
+  target_include_directories(test_util PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  add_test(NAME test_util COMMAND test_util)
+
+  add_executable(test_capnp
+    tests/test_capnp.cpp
+    ${CAPNP_SRCS}
+    ${CAPNP_HDRS}
+  )
+  target_include_directories(test_capnp PRIVATE ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_BINARY_DIR}/src)
+  target_link_libraries(test_capnp CapnProto::capnp CapnProto::kj)
+  add_test(NAME test_capnp COMMAND test_capnp)
 endif()
 
