@@ -1,0 +1,19 @@
+clusters:
+  - name: default
+    nodes:
+      - name: ch1
+        host: clickhouse-server
+        port: 8123
+
+users:
+  - name: default
+    to_cluster: default
+    to_user: default
+    allow_cors: true
+    requests_per_minute: 1
+
+frontends:
+  - name: http
+    bind_addr: 0.0.0.0:8124
+    users:
+      - default

@@ -9,14 +9,6 @@
 #include <spdlog/spdlog.h>
 #include "util.h"
 
-// ---------------------------------------------------------------------------
-// Constants – for production, prefer loading from argv/env
-inline constexpr const char* KAFKA_BROKER   = "localhost:9092,broker:29092";
-inline constexpr const char* KAFKA_TOPIC    = "http_log";
-inline constexpr const char* KAFKA_GROUP_ID_DEFAULT = "anonymizer";
-inline constexpr const char* CLICKHOUSE_URL =
-    "http://localhost:8124/?query=INSERT%20INTO%20logs.http_log%20FORMAT%20JSONEachRow&input_format_defaults_for_omitted_fields=1";
-
 // Helpers are declared in `util.h`
 
 // ---------------------------------------------------------------------------

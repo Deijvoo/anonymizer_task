@@ -137,8 +137,12 @@ services:
       - broker
       - ch-proxy
     environment:
-      - CLICKHOUSE_URL=http://ch-proxy:8124/?query=INSERT%20INTO%20logs.http_log%20FORMAT%20JSONEachRow
+      - CLICKHOUSE_URL=http://ch-proxy:8124/?query=INSERT%20INTO%20logs.http_log%20FORMAT%20JSONEachRow&input_format_defaults_for_omitted_fields=1
       - KAFKA_BROKERS=broker:29092
+      - KAFKA_GROUP_ID=anonymizer
+      - KAFKA_TOPIC=http_log
+      - BATCH_MAX=50000
+      - FLUSH_SECONDS=60
     container_name: anonymizer
 
   http-log-kafka-producer:

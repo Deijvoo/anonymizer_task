@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 
 std::string anonymize_ip(std::string_view ip) {
     auto dot = ip.rfind('.');
@@ -22,6 +23,11 @@ std::string join_rows(const std::vector<std::string> &rows) {
 std::string getEnvOrDefault(const char* name, const char* fallback) {
     if (const char* v = std::getenv(name); v && *v) return std::string(v);
     return std::string(fallback);
+}
+
+std::string getRequiredEnv(const char* name) {
+    if (const char* v = std::getenv(name); v && *v) return std::string(v);
+    throw std::runtime_error(std::string("Required env var not set: ") + name);
 }
 
 std::string escape_json(std::string_view s) {

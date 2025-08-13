@@ -28,11 +28,11 @@ KafkaConsumer::KafkaConsumer() {
 
     std::unique_ptr<RdKafka::Conf> conf(RdKafka::Conf::create(RdKafka::Conf::CONF_GLOBAL));
     {
-        std::string brokers = getEnvOrDefault("KAFKA_BROKERS", KAFKA_BROKER);
+        std::string brokers = getRequiredEnv("KAFKA_BROKERS");
         conf->set("bootstrap.servers", brokers, err);
     }
     {
-        std::string groupId = getEnvOrDefault("KAFKA_GROUP_ID", KAFKA_GROUP_ID_DEFAULT);
+        std::string groupId = getRequiredEnv("KAFKA_GROUP_ID");
         conf->set("group.id", groupId, err);
     }
     conf->set("enable.auto.commit", "false", err);
@@ -43,13 +43,14 @@ KafkaConsumer::KafkaConsumer() {
         throw std::runtime_error("Kafka create failed: " + err);
     }
 
-    if (auto rc = consumer_->subscribe({KAFKA_TOPIC}); rc != RdKafka::ERR_NO_ERROR) {
+    const std::string topic = getRequiredEnv("KAFKA_TOPIC");
+    if (auto rc = consumer_->subscribe({topic}); rc != RdKafka::ERR_NO_ERROR) {
         auto what = "Kafka subscribe: " + RdKafka::err2str(rc);
         spdlog::critical("{}", what);
         throw std::runtime_error(what);
     }
 
-    spdlog::info("Kafka consumer subscribed to topic {}", KAFKA_TOPIC);
+    spdlog::info("Kafka consumer subscribed to topic {}", topic);
 }
 
 KafkaConsumer::~KafkaConsumer() {
@@ -84,7 +85,7 @@ void KafkaConsumer::commitCurrent() {
 
 ClickHouseSink::ClickHouseSink() {
     curl_global_init(CURL_GLOBAL_ALL);
-    url_ = getEnvOrDefault("CLICKHOUSE_URL", CLICKHOUSE_URL);
+    url_ = getRequiredEnv("CLICKHOUSE_URL");
 }
 
 ClickHouseSink::~ClickHouseSink() {

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Verify Prometheus is scraping Kafka JMX exporter and target is up.
 
-PROM=http://localhost:9090
+PROM=${PROM:-http://localhost:9090}
 
 echo "[itest-prom] waiting for Prometheus..."
 deadline=$(( $(date +%s) + 60 ))
@@ -14,9 +14,9 @@ done
 
 echo "[itest-prom] checking kafka target up metric (sum)..."
 # Query Prometheus for sum(up{job="kafka"}) and parse numeric without jq
-raw=$(curl -fsS "$PROM/api/v1/query?query=sum(up%7Bjob%3D%22kafka%22%7D)")
-# Extract the numeric value: look for ,"value":[<ts>,"<num>"]
-val=$(printf "%s" "$raw" | sed -n 's/.*\"value\":\[[0-9]\{10,\},\"\([0-9][0-9]*\(\.[0-9][0-9]*\)\?\)\"\].*/\1/p')
+raw=$(docker compose exec -T prometheus wget -qO- "http://localhost:9090/api/v1/query?query=sum(up%7Bjob%3D%22kafka%22%7D)" 2>/dev/null || curl -fsS "$PROM/api/v1/query?query=sum(up%7Bjob%3D%22kafka%22%7D)" || true)
+# Extract the numeric value: tolerate float timestamps
+val=$(printf "%s" "$raw" | sed -n 's/.*"value":\[[0-9][0-9]*\(\.[0-9][0-9]*\)\?,"\([0-9][0-9]*\(\.[0-9][0-9]*\)\?\)".*/\2/p')
 echo "sum(up{job=\\\"kafka\\\"})=$val"
 
 if [ -n "${val:-}" ] && awk "BEGIN{exit !($val>=1)}"; then
