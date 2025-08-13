@@ -359,6 +359,148 @@
             ],
             "title": "bytes per minute",
             "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "vertamedia-clickhouse-datasource",
+                "uid": "PDEE91DDB90597936"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "axisLabel": "seconds",
+                        "axisPlacement": "auto",
+                        "barAlignment": 0,
+                        "drawStyle": "line",
+                        "fillOpacity": 10,
+                        "gradientMode": "none",
+                        "hideFrom": {
+                            "legend": false,
+                            "tooltip": false,
+                            "viz": false
+                        },
+                        "lineInterpolation": "linear",
+                        "lineWidth": 2,
+                        "pointSize": 3,
+                        "scaleDistribution": {
+                            "type": "linear"
+                        },
+                        "showPoints": "auto",
+                        "spanNulls": true,
+                        "stacking": {
+                            "group": "A",
+                            "mode": "none"
+                        },
+                        "thresholdsStyle": {
+                            "mode": "off"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": null
+                            },
+                            {
+                                "color": "red",
+                                "value": 120
+                            }
+                        ]
+                    }
+                },
+                "overrides": []
+            },
+            "gridPos": {
+                "h": 9,
+                "w": 24,
+                "x": 0,
+                "y": 18
+            },
+            "id": 5,
+            "options": {
+                "legend": {
+                    "calcs": [],
+                    "displayMode": "list",
+                    "placement": "bottom"
+                },
+                "tooltip": {
+                    "mode": "single",
+                    "sort": "none"
+                }
+            },
+            "targets": [
+                {
+                    "database": "logs",
+                    "datasource": {
+                        "type": "vertamedia-clickhouse-datasource",
+                        "uid": "PDEE91DDB90597936"
+                    },
+                    "dateColDataType": "",
+                    "dateLoading": false,
+                    "dateTimeColDataType": "timestamp",
+                    "dateTimeType": "DATETIME",
+                    "datetimeLoading": false,
+                    "extrapolate": true,
+                    "format": "time_series",
+                    "formattedQuery": "SELECT $timeSeries as t, count() FROM $table WHERE $timeFilter GROUP BY t ORDER BY t",
+                    "intervalFactor": 1,
+                    "query": "SELECT (intDiv(toUInt32(ingested_at), 60) * 60) * 1000 AS t, quantileTDigest(0.5)(ingested_at - timestamp) AS p50_s FROM logs.http_log WHERE $timeFilterByColumn(ingested_at) AND (ingested_at - timestamp) BETWEEN 0 AND 7200 GROUP BY t ORDER BY t",
+                    "refId": "A",
+                    "round": "0s",
+                    "skip_comments": true,
+                    "table": "http_log",
+                    "tableLoading": false
+                },
+                {
+                    "database": "logs",
+                    "datasource": {
+                        "type": "vertamedia-clickhouse-datasource",
+                        "uid": "PDEE91DDB90597936"
+                    },
+                    "dateColDataType": "",
+                    "dateLoading": false,
+                    "dateTimeColDataType": "timestamp",
+                    "dateTimeType": "DATETIME",
+                    "datetimeLoading": false,
+                    "extrapolate": true,
+                    "format": "time_series",
+                    "intervalFactor": 1,
+                    "query": "SELECT (intDiv(toUInt32(ingested_at), 60) * 60) * 1000 AS t, quantileTDigest(0.9)(ingested_at - timestamp) AS p90_s FROM logs.http_log WHERE $timeFilterByColumn(ingested_at) AND (ingested_at - timestamp) BETWEEN 0 AND 7200 GROUP BY t ORDER BY t",
+                    "refId": "B",
+                    "round": "0s",
+                    "skip_comments": true,
+                    "table": "http_log",
+                    "tableLoading": false
+                },
+                {
+                    "database": "logs",
+                    "datasource": {
+                        "type": "vertamedia-clickhouse-datasource",
+                        "uid": "PDEE91DDB90597936"
+                    },
+                    "dateColDataType": "",
+                    "dateLoading": false,
+                    "dateTimeColDataType": "timestamp",
+                    "dateTimeType": "DATETIME",
+                    "datetimeLoading": false,
+                    "extrapolate": true,
+                    "format": "time_series",
+                    "intervalFactor": 1,
+                    "query": "SELECT (intDiv(toUInt32(ingested_at), 60) * 60) * 1000 AS t, quantileTDigest(0.99)(ingested_at - timestamp) AS p99_s FROM logs.http_log WHERE $timeFilterByColumn(ingested_at) AND (ingested_at - timestamp) BETWEEN 0 AND 7200 GROUP BY t ORDER BY t",
+                    "refId": "C",
+                    "round": "0s",
+                    "skip_comments": true,
+                    "table": "http_log",
+                    "tableLoading": false
+                }
+            ],
+            "title": "E2E latency (p50/p90/p99) seconds",
+            "type": "timeseries"
         }
     ],
     "refresh": false,
@@ -376,6 +518,6 @@
     "timezone": "",
     "title": "http_logs dashboard",
     "uid": "Udv61blHz",
-    "version": 1,
+    "version": 2,
     "weekStart": ""
 }

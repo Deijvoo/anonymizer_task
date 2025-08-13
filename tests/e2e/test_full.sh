@@ -64,3 +64,15 @@ fi
 
 echo "[e2e] FULL E2E OK"
 
+# Extra checks
+echo "[e2e] verifying Prometheus Kafka scrape via API..."
+bash tests/integration/prometheus_kafka_metrics.sh
+
+echo "[e2e] simulating Kafka broker failure and recovery..."
+bash tests/integration/kafka_failure.sh
+
+echo "[e2e] printing ClickHouse E2E latency quantiles (last 1h)..."
+bash tests/integration/clickhouse_latency_quantiles.sh | sed 's/^/[e2e-latency] /'
+
+echo "[e2e] ALL CHECKS OK"
+

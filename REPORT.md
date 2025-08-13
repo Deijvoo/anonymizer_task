@@ -38,7 +38,7 @@ What I considered and (for now) rejected:
    - Our Prometheus job is `kafka` scraping `jmx-kafka:5556`.
 
 5) ClickHouse → Grafana (HTTP Logs)
-   - Visualize traffic: rows/min, bytes/min, RPS, p95 latencies, status mix, top URLs. We deliver two ClickHouse dashboards in JSON.
+   - Visualize traffic: rows/min, bytes/min, RPS, and end‑to‑end latency quantiles using `ingested_at - timestamp`. Dashboard JSON included.
 
 6) Kafka → Kafka‑UI (optional)
    - Convenience UI to inspect topics, consumer groups, offsets and lag while testing.
@@ -57,7 +57,7 @@ What I considered and (for now) rejected:
 - Idle topic: time-based flush still occurs via a timer path checked each loop iteration.
 
 ### Performance
-- Insert cadence: ~60–70s between flushes (window + network + CH). This dominates end-to-end latency.
+- Insert cadence: ~60–70s between flushes (window + network + CH). This dominates end-to-end latency. E2E median typically O(1–2) min under 1 req/min policy.
 - Throughput: limited by 1 req/min; within that, large batched inserts are efficient for CH.
 - Observability: Grafana ClickHouse panels show rows/min, bytes/min, RPS; Kafka panels show request idle %, messages/sec.
 
@@ -120,7 +120,9 @@ Scaling paths
 - Integration (needs stack):
   - Kafka → anonymizer: `bash tests/integration/kafka_to_anonymizer.sh`
   - Anonymizer → ClickHouse: `bash tests/integration/anonymizer_to_clickhouse.sh`
-- E2E (full): `bash tests/e2e/test_full.sh`
+  - Prometheus JMX scrape: `bash tests/integration/prometheus_kafka_metrics.sh`
+  - Kafka failure & recovery: `bash tests/integration/kafka_failure.sh`
+- E2E (full): `bash tests/e2e/test_full.sh` (also prints E2E latency quantiles)
 
 ### Real data snapshot (from running system)
 - Total rows: 4,448
@@ -136,9 +138,9 @@ Scaling paths
   - 19:04 1898; 19:05 17124.4; 19:06 21115.55; 19:07 26934.85; 19:08 20503.65; 19:09 17174; 19:10 23104.9; 19:11 16323.3; 19:12 25270.45; 19:13 28236.25; 19:14 7904.25; 19:15 11873; 19:16 23369.75
 
 ### Dashboards and screenshots
-- ClickHouse dashboards: `grafana/dashboards/http_log_overview.json`, `grafana/dashboards/http_logs_dashboard.json`
-- Prometheus/Kafka: `grafana/dashboards/` (broker overview, replication, performance, JMX, topics)
-- Screenshot: add a single full dashboard PNG at `report_assets/dashboard.png`.
+- ClickHouse dashboard: `grafana/dashboards/http_logs_dashboard.json` (rows/min, RPS, bytes/min, p50/p90/p99 E2E latency)
+- Prometheus/Kafka: dashboards in `grafana/dashboards/` (broker overview, replication, performance, JMX, topics)
+- Screenshot: `report_assets/dashboard.png`.
 
 ### Appendix: SQL (DDL)
 `etc/clickhouse/01_schema.sql` creates:
